@@ -53,9 +53,10 @@ data Command = GetPort (Either SomeException Port -> KIO ())
              | RemoveEntry Host
 
 -- | An individual virtual host may either be a reverse proxy to an app
--- (@AppEntry@), or may serve static files (@StaticEntry@).
+-- (@AppEntry@), or may serve static files (@StaticEntry@), or both.
 data Entry = AppEntry Port
            | StaticEntry FilePath
+           | CombinedEntry Port FilePath
 
 -- | An abstract type which can accept commands and sends them to a background
 -- nginx thread.
@@ -180,17 +181,30 @@ start Settings{..} = do
             case res2 of
                 Left e -> $logEx e
                 Right () -> return ()
-    mkConfig = toLazyByteString . mconcat . map mkConfig' . Map.toList
-    mkConfig' (host, entry) =
-        copyByteString "server {\n    listen 80;\n    server_name " ++
-        fromText host ++ copyByteString ";\n" ++
-        mkConfigEntry entry ++
-        copyByteString "}\n"
-    mkConfigEntry (AppEntry port) =
-        copyByteString "    location / {\n        proxy_pass http://127.0.0.1:" ++
-        fromShow port ++ copyByteString ";\n        proxy_set_header X-Real-IP $remote_addr;\n    }\n"
-    mkConfigEntry (StaticEntry fp) =
-        copyByteString "    root " ++ fromString (toString fp) ++ copyByteString ";\n    expires max;\n"
+    mkConfig = toLazyByteString . mconcat . map writeConfig . Map.toList
+
+    -- TODO: seems innefficient compared with how it was, but i really
+    -- want the text aligned as it will be written to avoid mistakes,
+    -- maybe a quasi-quoter could be written for this?
+    writeConfig (host, entry)      =  copyByteString "server {\n"
+                                   ++ copyByteString "    listen 80;\n"
+                                   ++ copyByteString "    server_name " ++ fromText host ++ copyByteString ";\n"
+                                   ++                     writeLocation entry
+                                   ++ copyByteString "}\n"
+
+    writeLocation (AppEntry port)  =  copyByteString "    location / {\n"
+                                   ++ copyByteString "       proxy_pass http://127.0.01:" ++ fromShow port ++ copyByteString ";\n"
+                                   ++ copyByteString "       proxy_set_header X-Real-IP $remote_addr;\n"
+                                   ++ copyByteString "    }\n"
+    writeLocation (StaticEntry fp) =  copyByteString "    location /static {\n" -- TODO: allow /static to be customized
+                                   ++ copyByteString "        root " ++ fromString (toString fp) ++ copyByteString ";\n"
+                                   ++ copyByteString "        index index.html index.htm;\n"
+                                   ++ copyByteString "        autoindex on;\n"
+                                   ++ copyByteString "        expires max;\n"
+                                   ++ copyByteString "    }\n"
+
+    writeLocation (CombinedEntry port fp) =  writeLocation (AppEntry port)
+                                          ++ writeLocation (StaticEntry fp)
 
 data NState = NState
     { nsAvail :: [Port]

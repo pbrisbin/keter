@@ -31,6 +31,7 @@ data Config = Config
     , configArgs :: [Text]
     , configHost :: String
     , configPostgres :: Bool
+    , configStatic :: F.FilePath
     }
 
 instance FromJSON Config where
@@ -39,6 +40,7 @@ instance FromJSON Config where
         <*> o .:? "args" .!= []
         <*> o .: "host"
         <*> o .:? "postgres" .!= False
+        <*> (F.fromText <$> o .:? "static_dir" .!= "")
     parseJSON _ = fail "Wanted an object"
 
 data Command = Reload | Terminate
@@ -129,7 +131,10 @@ start tf nginx postgres logger appname bundle removeFromList = do
                         b <- testApp port
                         if b
                             then do
-                                addEntry nginx (configHost config) $ AppEntry port
+                                let static = configStatic config
+                                if not $ F.null static
+                                    then addEntry nginx (configHost config) $ CombinedEntry port static
+                                    else addEntry nginx (configHost config) $ AppEntry port
                                 loop chan dir process port config
                             else do
                                 removeFromList
@@ -160,7 +165,10 @@ start tf nginx postgres logger appname bundle removeFromList = do
                                 b <- testApp port
                                 if b
                                     then do
-                                        addEntry nginx (configHost config) $ AppEntry port
+                                        let static = configStatic config
+                                        if not $ F.null static
+                                            then addEntry nginx (configHost config) $ CombinedEntry port static
+                                            else addEntry nginx (configHost config) $ AppEntry port
                                         when (configHost config /= configHost configOld) $
                                             removeEntry nginx $ configHost configOld
                                         log $ FinishedReloading appname
